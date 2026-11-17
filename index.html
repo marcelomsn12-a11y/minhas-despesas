@@ -167,6 +167,13 @@ tbody tr:hover{background:var(--surface-2)}
 .login .fld input{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
 .mobile-only{display:none}
 @media (max-width:900px){.mobile-only{display:block}}
+
+.seg{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:3px;gap:2px}
+.seg button{border:0;background:none;padding:5px 10px;border-radius:7px;cursor:pointer;font-size:13px;color:var(--text-2);white-space:nowrap}
+.seg button:hover{background:var(--surface-2)}
+.seg button.on{background:var(--accent-soft);color:var(--text);font-weight:600}
+.perctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.perctl input[type=month]{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:6px 8px}
 </style>
 </head>
 <body>
@@ -262,9 +269,9 @@ function setBudget(cat,val){
 }
 
 /* ---------- UI state ---------- */
-let UI={tab:'painel',month:CUR,f:{q:'',m:'',cat:'',card:'',s:''},sort:{k:'d',dir:-1},limit:150,sel:new Set()};
-try{const u=JSON.parse(sessionStorage.getItem('md-ui')||'null');if(u){UI.tab=u.tab||UI.tab;UI.month=u.month||UI.month;UI.f=Object.assign(UI.f,u.f||{});UI.sort=u.sort||UI.sort;}}catch(e){}
-function saveUI(){try{sessionStorage.setItem('md-ui',JSON.stringify({tab:UI.tab,month:UI.month,f:UI.f,sort:UI.sort}))}catch(e){}}
+let UI={tab:'painel',month:CUR,per:{mode:'mes',year:now.getFullYear(),from:'',to:''},f:{q:'',m:'',cat:'',card:'',s:''},sort:{k:'d',dir:-1},limit:150,sel:new Set()};
+try{const u=JSON.parse(sessionStorage.getItem('md-ui')||'null');if(u){UI.tab=u.tab||UI.tab;UI.month=u.month||UI.month;UI.f=Object.assign(UI.f,u.f||{});UI.sort=u.sort||UI.sort;if(u.per)UI.per=Object.assign(UI.per,u.per);}}catch(e){}
+function saveUI(){try{sessionStorage.setItem('md-ui',JSON.stringify({tab:UI.tab,month:UI.month,per:UI.per,f:UI.f,sort:UI.sort}))}catch(e){}}
 const TABS=[
  ['painel','Painel','<path d="M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z"/>'],
  ['lancamentos','Lançamentos','<path d="M4 6h16M4 12h16M4 18h10"/>'],
@@ -388,61 +395,104 @@ function baseOpts(){const t2=css('--text-2'),ln=css('--line');return {responsive
 function hbar(canvas,labels,vals,onClick){if(typeof Chart==='undefined')return;
   const o=baseOpts();o.indexAxis='y';o.scales={x:{grid:{color:css('--line')},border:{display:false},ticks:{color:css('--text-2'),font:{size:11},callback:v=>brlk(v),maxTicksLimit:5}},y:{grid:{display:false},ticks:{color:css('--text'),font:{size:12}},border:{color:css('--line')}}};
   o.plugins.tooltip.callbacks.label=c=>brl(c.parsed.x);
-  if(onClick){o.onClick=(e,els)=>{if(els.length)onClick(labels[els[0].index])};o.onHover=(e,els)=>{e.native.target.style.cursor=els.length?'pointer':'default'};}
+  if(onClick){o.onClick=(e,els)=>{if(els.length){const l=labels[els[0].index];setTimeout(()=>onClick(l),0);}};o.onHover=(e,els)=>{e.native.target.style.cursor=els.length?'pointer':'default'};}
   charts.push(new Chart(canvas,{type:'bar',data:{labels,datasets:[{data:vals,backgroundColor:css('--accent'),borderRadius:4,borderSkipped:'start',barThickness:14}]},options:o}));}
 
 /* ---------- PAINEL ---------- */
+/* ---------- período do Painel ---------- */
+function perRange(){
+  const P=UI.per,all=months(),first=all[0]||CUR,last=all[all.length-1]||CUR;
+  if(P.mode==='ano')return {from:P.year+'-01',to:P.year+'-12'};
+  if(P.mode==='tudo')return {from:first,to:last};
+  if(P.mode==='custom'){let a=P.from||first,b=P.to||last;if(a>b){const x=a;a=b;b=x;}return {from:a,to:b};}
+  return {from:UI.month,to:UI.month};
+}
+function perLong(R){const m=UI.per.mode;
+  if(m==='mes')return mLong(R.from);
+  if(m==='ano')return 'Ano de '+UI.per.year;
+  if(m==='tudo')return 'Todo o período ('+mLbl(R.from)+' a '+mLbl(R.to)+')';
+  return R.from===R.to?mLong(R.from):mLbl(R.from)+' a '+mLbl(R.to);}
+function perShort(R){const m=UI.per.mode;
+  if(m==='mes')return mLbl(R.from);
+  if(m==='ano')return String(UI.per.year);
+  if(m==='tudo')return 'todo o período';
+  return R.from===R.to?mLbl(R.from):mLbl(R.from)+' a '+mLbl(R.to);}
+function perPicker(){
+  const P=UI.per;
+  const seg='<div class="seg">'+[['mes','Mês'],['ano','Ano'],['tudo','Todo o período'],['custom','Personalizado']].map(([k,l])=>`<button data-pm="${k}" class="${P.mode===k?'on':''}">${l}</button>`).join('')+'</div>';
+  let ctl='';
+  if(P.mode==='mes')ctl=monthPicker();
+  else if(P.mode==='ano')ctl=`<div class="monthpick"><button data-yk="-1" aria-label="Ano anterior">‹</button><span>${P.year}</span><button data-yk="1" aria-label="Próximo ano">›</button></div>`;
+  else if(P.mode==='custom'){const R=perRange();ctl=`<div class="perctl"><input type="month" id="pf" value="${R.from}" aria-label="De"><span class="hint">até</span><input type="month" id="pt" value="${R.to}" aria-label="Até"></div>`;}
+  return `<div class="perctl">${seg}${ctl}</div>`;
+}
+function bindPer(root){
+  const P=UI.per;
+  root.querySelectorAll('[data-pm]').forEach(b=>b.onclick=()=>{const k=b.dataset.pm;if(k===P.mode)return;
+    if(k==='ano')P.year=+UI.month.slice(0,4);
+    if(k==='custom'&&(!P.from||!P.to)){P.from=addM(UI.month,-5);P.to=UI.month;}
+    P.mode=k;render();saveUI();});
+  root.querySelectorAll('[data-yk]').forEach(b=>b.onclick=()=>{P.year+=+b.dataset.yk;render();saveUI();});
+  const pf=root.querySelector('#pf'),pt=root.querySelector('#pt');
+  if(pf)pf.onchange=()=>{if(pf.value){P.from=pf.value;P.to=P.to||pf.value;render();saveUI();}};
+  if(pt)pt.onchange=()=>{if(pt.value){P.to=pt.value;P.from=P.from||pt.value;render();saveUI();}};
+}
 function vPainel(){
   const v=document.getElementById('view');const M=UI.month;
-  const mr=rows.filter(r=>r.m===M);
-  const tot=sum(mr,r=>r.v), avg=avgPrev(M,6), dif=avg?(tot-avg)/avg*100:0;
+  const P=UI.per,R=perRange(),LBL=perLong(R),SH=perShort(R);
+  const mr=rows.filter(r=>r.m>=R.from&&r.m<=R.to);
+  const nM=(()=>{let n=0;for(let m=R.from;m<=R.to&&n<600;m=addM(m,1))n++;return n;})();
+  const tot=sum(mr,r=>r.v), avg=P.mode==='mes'?avgPrev(M,6):tot/nM, dif=avg?(tot-avg)/avg*100:0;
   const by=s=>sum(mr.filter(r=>r.s===s),r=>r.v);
+  const TE=(R.to>CUR&&R.from<=CUR)?CUR:R.to;
   const fut=sum(rows.filter(r=>r.m>CUR),r=>r.v);
   const futN=uniq(rows.filter(r=>r.m>CUR&&r.n>1).map(r=>r.g)).length;
   const late=rows.filter(r=>r.s==='T');
-  v.innerHTML=header('Painel',monthPicker())+`
+  v.innerHTML=header('Painel',perPicker())+`
   <div class="grid kpis">
-   <div class="card kpi"><div class="lbl">Total de ${mLong(M)}</div><div class="val">${brl(tot)}</div><div class="sub">${avg?`<span class="${dif>0?'up':'down'}">${dif>0?'▲':'▼'} ${Math.abs(dif).toFixed(0)}%</span> vs média de 6 meses (${brlk(avg)})`:'sem histórico anterior'}</div></div>
-   <div class="card kpi"><div class="lbl">Pago no mês</div><div class="val">${brl(by('P'))}</div><div class="sub">${mr.filter(r=>r.s==='P').length} de ${mr.length} lançamentos</div></div>
-   <div class="card kpi"><div class="lbl">Em aberto no mês</div><div class="val">${brl(by('A'))}</div><div class="sub">${by('T')?`<span class="up">+ ${brl(by('T'))} atrasado</span>`:'nenhum atraso no mês'}</div></div>
+   <div class="card kpi"><div class="lbl">${P.mode==='mes'?'Total de '+LBL:'Total · '+LBL}</div><div class="val">${brl(tot)}</div><div class="sub">${P.mode==='mes'?(avg?`<span class="${dif>0?'up':'down'}">${dif>0?'▲':'▼'} ${Math.abs(dif).toFixed(0)}%</span> vs média de 6 meses (${brlk(avg)})`:'sem histórico anterior'):`média de ${brlk(avg)} por mês · ${nM} ${nM===1?'mês':'meses'}`}</div></div>
+   <div class="card kpi"><div class="lbl">Pago ${P.mode==='mes'?'no mês':'no período'}</div><div class="val">${brl(by('P'))}</div><div class="sub">${mr.filter(r=>r.s==='P').length} de ${mr.length} lançamentos</div></div>
+   <div class="card kpi"><div class="lbl">Em aberto ${P.mode==='mes'?'no mês':'no período'}</div><div class="val">${brl(by('A'))}</div><div class="sub">${by('T')?`<span class="up">+ ${brl(by('T'))} atrasado</span>`:`nenhum atraso ${P.mode==='mes'?'no mês':'no período'}`}</div></div>
    <div class="card kpi"><div class="lbl">Comprometido após ${mLbl(CUR)}</div><div class="val">${brl(fut)}</div><div class="sub">${futN} parcelamentos ativos</div></div>
   </div>
   ${late.length?`<div class="card" style="margin-top:14px;border-color:var(--bad);display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span class="pill T">! Atrasado</span><span>${late.length} parcelas marcadas como atrasadas, somando <b>${brl(sum(late,r=>r.v))}</b>.</span><button class="btn sm" id="seeLate" style="margin-left:auto">Ver lançamentos</button></div>`:''}
   <div class="grid two" style="margin-top:14px">
-   <div class="card"><h3>Gastos por mês de pagamento <small>clique numa barra para abrir o mês</small></h3><div class="chartbox tall"><canvas id="cMonth"></canvas></div></div>
-   <div class="card"><h3>Por categoria em ${mLbl(M)} <small>clique para filtrar</small></h3><div class="chartbox tall"><canvas id="cCat"></canvas></div></div>
+   <div class="card"><h3>Gastos por mês de pagamento <small>${P.mode==='mes'?'clique numa barra para abrir o mês':'barras azuis fortes = período escolhido'}</small></h3><div class="chartbox tall"><canvas id="cMonth"></canvas></div></div>
+   <div class="card"><h3>Por categoria · ${SH} <small>clique para filtrar</small></h3><div class="chartbox tall"><canvas id="cCat"></canvas></div></div>
   </div>
   <div class="grid half" style="margin-top:14px">
-   <div class="card"><h3>Por cartão em ${mLbl(M)}</h3><div class="chartbox"><canvas id="cCard"></canvas></div></div>
-   <div class="card"><h3>Maiores gastos de ${mLbl(M)}</h3><div class="list-simple" id="topList"></div></div>
+   <div class="card"><h3>Por cartão · ${SH}</h3><div class="chartbox"><canvas id="cCard"></canvas></div></div>
+   <div class="card"><h3>Maiores gastos · ${SH}</h3><div class="list-simple" id="topList"></div></div>
   </div>
-  <div class="card" style="margin-top:14px"><h3>Evolução das principais categorias <small>últimos 12 meses</small></h3><div id="catTrend"></div></div>`;
-  bindMonth(v);bindHeader(v);
+  <div class="card" style="margin-top:14px"><h3>Evolução das principais categorias <small>12 meses até ${mLbl(TE)}</small></h3><div id="catTrend"></div></div>`;
+  bindMonth(v);bindPer(v);bindHeader(v);
   const sl=document.getElementById('seeLate');if(sl)sl.onclick=()=>{UI.f={q:'',m:'',cat:'',card:'',s:'T'};go('lancamentos')};
   const bm=byMonth();const all=Object.keys(bm).sort();
-  let start=addM(M,-12);if(start<all[0])start=all[0];
-  const end=all[all.length-1]>addM(M,6)?addM(M,6):all[all.length-1];
-  const ms=[];for(let m=start;m<=end;m=addM(m,1))ms.push(m);
+  const ms=[];
+  if(P.mode==='mes'){let start=addM(M,-12);if(start<all[0])start=all[0];
+    const end=all[all.length-1]>addM(M,6)?addM(M,6):all[all.length-1];
+    for(let m=start;m<=end;m=addM(m,1))ms.push(m);}
+  else{for(let m=all[0];m<=all[all.length-1];m=addM(m,1))ms.push(m);}
   if(typeof Chart!=='undefined'&&ms.length){
-   const o=baseOpts();o.onClick=(e,els)=>{if(els.length){UI.month=ms[els[0].index];render();saveUI();}};
+   const o=baseOpts();o.onClick=(e,els)=>{if(els.length){const m=ms[els[0].index];setTimeout(()=>{UI.month=m;P.mode='mes';render();saveUI();},0);}};
    o.onHover=(e,els)=>{e.native.target.style.cursor=els.length?'pointer':'default'};
    o.plugins.tooltip.callbacks.title=c=>mLong(ms[c[0].dataIndex])+(ms[c[0].dataIndex]>CUR?' (futuro)':'');
    charts.push(new Chart(document.getElementById('cMonth'),{type:'bar',data:{labels:ms.map(mLbl),datasets:[{data:ms.map(m=>bm[m]||0),
-     backgroundColor:ms.map(m=>m===M?css('--accent'):(m>CUR?css('--accent-soft'):css('--accent-2'))),borderRadius:4,borderSkipped:'start',maxBarThickness:28}]},options:o}));
+     backgroundColor:ms.map(m=>(m>=R.from&&m<=R.to)?css('--accent'):(m>CUR?css('--accent-soft'):css('--accent-2'))),borderRadius:4,borderSkipped:'start',maxBarThickness:28}]},options:o}));
   }
   const cm={};mr.forEach(r=>cm[r.cat]=(cm[r.cat]||0)+r.v);
   let ce=Object.entries(cm).sort((a,b)=>b[1]-a[1]);
   if(ce.length>9){const rest=ce.slice(8);ce=ce.slice(0,8);ce.push(['Outras ('+rest.length+')',sum(rest,x=>x[1])]);}
-  if(ce.length)hbar(document.getElementById('cCat'),ce.map(x=>x[0]),ce.map(x=>x[1]),c=>{if(c.startsWith('Outras ('))return;UI.f={q:'',m:M,cat:c,card:'',s:''};go('lancamentos')});
-  else document.getElementById('cCat').parentNode.innerHTML='<div class="empty">Sem lançamentos neste mês</div>';
+  if(ce.length)hbar(document.getElementById('cCat'),ce.map(x=>x[0]),ce.map(x=>x[1]),c=>{if(c.startsWith('Outras ('))return;UI.f={q:'',m:'',de:R.from,ate:R.to,cat:c,card:'',s:''};go('lancamentos')});
+  else document.getElementById('cCat').parentNode.innerHTML='<div class="empty">Sem lançamentos neste período</div>';
   const km={};mr.forEach(r=>km[r.card]=(km[r.card]||0)+r.v);
   const ke=Object.entries(km).sort((a,b)=>b[1]-a[1]);
-  if(ke.length)hbar(document.getElementById('cCard'),ke.map(x=>x[0]),ke.map(x=>x[1]),c=>{UI.f={q:'',m:M,cat:'',card:c,s:''};go('lancamentos')});
+  if(ke.length)hbar(document.getElementById('cCard'),ke.map(x=>x[0]),ke.map(x=>x[1]),c=>{UI.f={q:'',m:'',de:R.from,ate:R.to,cat:'',card:c,s:''};go('lancamentos')});
   else document.getElementById('cCard').parentNode.innerHTML='<div class="empty">—</div>';
   const top=[...mr].sort((a,b)=>b.v-a.v).slice(0,8);
   document.getElementById('topList').innerHTML=top.length?top.map(r=>`<div class="r"><span class="grow" title="${esc(r.desc)}">${esc(r.desc)}<br><span class="hint">${esc(r.cat)} · ${esc(r.card)}${r.n>1?' · '+r.p+'/'+r.n:''}</span></span><b class="num">${brl(r.v)}</b></div>`).join(''):'<div class="empty">—</div>';
-  const last=[];for(let i=11;i>=0;i--)last.push(addM(M,-i));
-  const tc={};rows.forEach(r=>{if(r.m>=last[0]&&r.m<=M){tc[r.cat]=tc[r.cat]||{};tc[r.cat][r.m]=(tc[r.cat][r.m]||0)+r.v;}});
+  const last=[];for(let i=11;i>=0;i--)last.push(addM(TE,-i));
+  const tc={};rows.forEach(r=>{if(r.m>=last[0]&&r.m<=TE){tc[r.cat]=tc[r.cat]||{};tc[r.cat][r.m]=(tc[r.cat][r.m]||0)+r.v;}});
   const topc=Object.entries(tc).map(([c,o])=>[c,sum(Object.values(o),x=>x)]).sort((a,b)=>b[1]-a[1]).slice(0,8);
   const mx=Math.max(1,...topc.flatMap(([c])=>last.map(m=>tc[c][m]||0)));
   document.getElementById('catTrend').innerHTML=topc.length?`<div style="overflow:auto"><table class="fat"><thead><tr><th>Categoria</th>${last.map(m=>`<th>${mLbl(m)}</th>`).join('')}<th>Média</th></tr></thead><tbody>${topc.map(([c,t])=>`<tr><td>${esc(c)}</td>${last.map(m=>{const x=tc[c][m]||0;const a=x?0.12+0.78*x/mx:0;return `<td title="${esc(c)} · ${mLong(m)}: ${brl(x)}" style="background:${x?`color-mix(in srgb, var(--accent) ${Math.round(a*100)}%, transparent)`:'transparent'};color:${a>0.55?'#fff':'inherit'};font-size:12px">${x?brlk(x).replace(/R\$\s?/,''):'·'}</td>`}).join('')}<td><b>${brlk(t/12)}</b></td></tr>`).join('')}</tbody></table></div><div class="hint" style="margin-top:6px">Quanto mais escura a célula, maior o gasto. Valores em reais.</div>`:'<div class="empty">—</div>';
@@ -451,7 +501,7 @@ function vPainel(){
 /* ---------- LANÇAMENTOS ---------- */
 function filtered(){
   const f=UI.f,q=f.q.trim().toLowerCase();
-  let a=rows.filter(r=>(!f.m||r.m===f.m)&&(!f.cat||r.cat===f.cat)&&(!f.card||r.card===f.card)&&(!f.s||r.s===f.s)&&(!q||r.desc.toLowerCase().includes(q)||r.cat.toLowerCase().includes(q)));
+  let a=rows.filter(r=>(!f.m||r.m===f.m)&&(!f.de||r.m>=f.de)&&(!f.ate||r.m<=f.ate)&&(!f.cat||r.cat===f.cat)&&(!f.card||r.card===f.card)&&(!f.s||r.s===f.s)&&(!q||r.desc.toLowerCase().includes(q)||r.cat.toLowerCase().includes(q)));
   const {k,dir}=UI.sort;
   a.sort((x,y)=>{let A=x[k],B=y[k];if(typeof A==='string')return A.localeCompare(B,'pt-BR')*dir||(y.id-x.id);return (A-B)*dir||(y.id-x.id)});
   return a;
@@ -476,7 +526,7 @@ function vLanc(){
   bindHeader(v);
   const upd=()=>{UI.limit=150;UI.sel.clear();drawTable();saveUI();};
   let qt;document.getElementById('fq').oninput=e=>{clearTimeout(qt);qt=setTimeout(()=>{f.q=e.target.value;upd()},200)};
-  [['fm','m'],['fc','cat'],['fk','card'],['fs','s']].forEach(([id,k])=>document.getElementById(id).onchange=e=>{f[k]=e.target.value;upd()});
+  [['fm','m'],['fc','cat'],['fk','card'],['fs','s']].forEach(([id,k])=>document.getElementById(id).onchange=e=>{f[k]=e.target.value;if(k==='m'){f.de='';f.ate='';}upd()});
   document.getElementById('fclear').onclick=()=>{UI.f={q:'',m:'',cat:'',card:'',s:''};UI.sel.clear();vLanc();saveUI();};
   drawTable();
 }
@@ -485,7 +535,7 @@ function drawTable(){
   const a=filtered();const shown=a.slice(0,UI.limit);
   const sel=UI.sel;
   const selRows=a.filter(r=>sel.has(r.id));
-  document.getElementById('lsum').innerHTML=`<span><b>${a.length.toLocaleString('pt-BR')}</b> lançamentos</span><span>Total <b>${brl(sum(a,r=>r.v))}</b></span><span>Em aberto <b>${brl(sum(a.filter(r=>r.s!=='P'),r=>r.v))}</b></span>
+  document.getElementById('lsum').innerHTML=`${(UI.f.de||UI.f.ate)?`<span>Período <b>${UI.f.de===UI.f.ate?mLong(UI.f.de):mLbl(UI.f.de||'')+' a '+mLbl(UI.f.ate||'')}</b></span>`:''}<span><b>${a.length.toLocaleString('pt-BR')}</b> lançamentos</span><span>Total <b>${brl(sum(a,r=>r.v))}</b></span><span>Em aberto <b>${brl(sum(a.filter(r=>r.s!=='P'),r=>r.v))}</b></span>
    <span class="bulk">${sel.size?`<span>${sel.size} selecionados (${brl(sum(selRows,r=>r.v))})</span><button class="btn sm" data-bulk="P">✓ Marcar pago</button><button class="btn sm" data-bulk="A">Em aberto</button><button class="btn sm danger" data-bulk="del">Excluir</button>`:''}</span>`;
   const SO=UI.sort;const th=(k,l,c)=>`<th class="${c||''}" data-sort="${k}">${l}${SO.k===k?(SO.dir>0?' ▲':' ▼'):''}</th>`;
   document.getElementById('ltab').innerHTML=`<thead><tr><th style="width:28px"><input type="checkbox" class="chk" id="chkall" ${shown.length&&shown.every(r=>sel.has(r.id))?'checked':''}></th>${th('d','Data')}${th('desc','Descrição')}${th('cat','Categoria')}${th('card','Cartão')}${th('p','Parcela','num')}${th('v','Valor','num')}${th('m','Pagamento')}${th('s','Status')}<th></th></tr></thead>
