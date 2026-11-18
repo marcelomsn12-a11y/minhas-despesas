@@ -190,6 +190,8 @@ tbody tr:hover{background:var(--surface-2)}
 .proj .neg{color:var(--bad)}.proj .pos{color:var(--good)}
 .proj .lnk{border:0;background:none;padding:0;cursor:pointer;text-align:left;font:inherit;color:inherit;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .proj .lnk:hover{text-decoration:underline}
+.proj .pg{color:var(--muted)}.proj .pg s{text-decoration-thickness:1px}
+.zsw{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-2);cursor:pointer;white-space:nowrap}.zsw input{width:auto;margin:0}
 .proj .dia{color:var(--muted);margin-right:6px;font-variant-numeric:tabular-nums}
 .pjctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .pjctl select{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:7px 8px}
@@ -297,7 +299,7 @@ function setBudget(cat,val){
 }
 
 /* ---------- UI state ---------- */
-let UI={tab:'painel',month:CUR,pj:{start:'',n:12},per:{mode:'mes',year:now.getFullYear(),from:'',to:''},f:{q:'',m:'',cat:'',card:'',s:''},sort:{k:'d',dir:-1},limit:150,sel:new Set()};
+let UI={tab:'painel',month:CUR,pj:{start:'',n:12,z:true},per:{mode:'mes',year:now.getFullYear(),from:'',to:''},f:{q:'',m:'',cat:'',card:'',s:''},sort:{k:'d',dir:-1},limit:150,sel:new Set()};
 try{const u=JSON.parse(sessionStorage.getItem('md-ui')||'null');if(u){UI.tab=u.tab||UI.tab;UI.month=u.month||UI.month;UI.f=Object.assign(UI.f,u.f||{});UI.sort=u.sort||UI.sort;if(u.per)UI.per=Object.assign(UI.per,u.per);if(u.pj)UI.pj=Object.assign(UI.pj,u.pj);}}catch(e){}
 function saveUI(){try{sessionStorage.setItem('md-ui',JSON.stringify({tab:UI.tab,month:UI.month,per:UI.per,pj:UI.pj,f:UI.f,sort:UI.sort}))}catch(e){}}
 const TABS=[
@@ -646,21 +648,24 @@ function vParc(){
 }
 
 /* ---------- PROJEÇÃO ---------- */
-const fromDbP=x=>({id:x.id,t:x.tipo,desc:x.descricao,dia:x.dia,m:String(x.mes).slice(0,7),v:+x.valor});
-const toDbP=r=>({tipo:r.t,descricao:r.desc,dia:r.dia||null,mes:r.m+'-01',valor:r2(r.v)});
+const fromDbP=x=>({id:x.id,t:x.tipo,desc:x.descricao,dia:x.dia,m:String(x.mes).slice(0,7),v:+x.valor,pg:!!x.pago});
+const toDbP=r=>({tipo:r.t,descricao:r.desc,dia:r.dia||null,mes:r.m+'-01',valor:r2(r.v),pago:!!r.pg});
 const numf=v=>v.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 let PV={rec:[],prev:[],lanc:[],MS:[]};
 function projMonths(){const P=UI.pj,s=P.start||CUR,a=[];for(let i=0;i<P.n;i++)a.push(addM(s,i));return a;}
-function groupProj(t){const g={};proj.filter(x=>x.t===t).forEach(x=>{const o=g[x.desc]||(g[x.desc]={desc:x.desc,dia:x.dia,vals:{}});o.vals[x.m]=(o.vals[x.m]||0)+x.v;if(x.dia&&!o.dia)o.dia=x.dia;});
+function groupProj(t,z){const g={};proj.filter(x=>x.t===t).forEach(x=>{const o=g[x.desc]||(g[x.desc]={desc:x.desc,dia:x.dia,vals:{},raw:{},pg:{}});o.raw[x.m]=(o.raw[x.m]||0)+x.v;o.pg[x.m]=!!x.pg;o.vals[x.m]=(z&&x.pg)?0:o.raw[x.m];if(x.dia&&!o.dia)o.dia=x.dia;});
   return Object.values(g).sort((a,b)=>(a.dia||99)-(b.dia||99)||a.desc.localeCompare(b.desc,'pt-BR'));}
 function vProj(){
   const v=document.getElementById('view');const P=UI.pj;
   const ctrl=(extra)=>`<div class="top"><h1>Projeção</h1>${extra||''}</div>`;
   if(!projOk){v.innerHTML=ctrl()+`<div class="card"><h3>Falta criar a tabela da projeção</h3><p class="hint" style="margin-top:0">Rode o arquivo <b>schema.sql</b> atualizado no SQL Editor do Supabase (ele só acrescenta a tabela nova, não mexe nos seus lançamentos) e recarregue esta página.</p></div>`;return;}
   const MS=projMonths(),first=MS[0],last=MS[MS.length-1];
-  const rec=groupProj('R'),prev=groupProj('D');
-  const lm={};rows.forEach(r=>{if(r.m>=first&&r.m<=last){const o=lm[r.card]||(lm[r.card]={desc:r.card,vals:{}});o.vals[r.m]=(o.vals[r.m]||0)+r.v;}});
-  const lanc=Object.values(lm).sort((a,b)=>sum(Object.values(b.vals),x=>x)-sum(Object.values(a.vals),x=>x));
+  const Z=P.z!==false;
+  const rec=groupProj('R',Z),prev=groupProj('D',Z);
+  const lm={};rows.forEach(r=>{if(r.m>=first&&r.m<=last){const o=lm[r.card]||(lm[r.card]={desc:r.card,vals:{},raw:{}});o.raw[r.m]=(o.raw[r.m]||0)+r.v;o.vals[r.m]=(o.vals[r.m]||0)+((Z&&r.s==='P')?0:r.v);}});
+  const lanc=Object.values(lm).sort((a,b)=>sum(Object.values(b.raw),x=>x)-sum(Object.values(a.raw),x=>x));
+  const zR=sum(rec,g=>sum(MS,m=>g.raw[m]||0)-sum(MS,m=>g.vals[m]||0));
+  const zD=sum(lanc,g=>sum(MS,m=>g.raw[m]||0)-sum(MS,m=>g.vals[m]||0))+sum(prev,g=>sum(MS,m=>g.raw[m]||0)-sum(MS,m=>g.vals[m]||0));
   const col=(arr,m)=>sum(arr,x=>x.vals[m]||0);
   const tR=MS.map(m=>col(rec,m)),tL=MS.map(m=>col(lanc,m)),tP=MS.map(m=>col(prev,m));
   const tD=MS.map((m,i)=>tL[i]+tP[i]),sal=MS.map((m,i)=>tR[i]-tD[i]);
@@ -671,16 +676,17 @@ function vProj(){
   const sgn=x=>`<span class="${x<0?'up':'down'}">${x<0?'−':''}${brl(Math.abs(x))}</span>`;
   const head=`<div class="pjctl"><div class="monthpick"><button data-ps="-1" aria-label="Mês anterior">‹</button><span style="min-width:128px">${mLbl(first)} a ${mLbl(last)}</span><button data-ps="1" aria-label="Próximo mês">›</button><button data-ps="0" style="font-size:12px">Hoje</button></div>
    <select id="pj-n" aria-label="Quantidade de meses">${[6,12,18,24,36].map(n=>`<option value="${n}" ${P.n===n?'selected':''}>${n} meses</option>`).join('')}</select>
+   <label class="zsw" title="Quando ligado, despesas com status Pago e itens marcados como recebidos/pagos saem das somas (ficam riscados com ✓)"><input type="checkbox" id="pj-z" ${Z?'checked':''}> Zerar pagos/recebidos</label>
    <button class="btn" id="pj-ar">+ Receita</button><button class="btn" id="pj-ad">+ Despesa prevista</button></div>`;
   const cl=(m)=>m===CUR?'cm ':'';
   const num=x=>x?numf(x):'<span class="muted">–</span>';
-  const erow=(arr,tp)=>arr.map((g,gi)=>`<tr><td><button class="lnk" data-eit="${tp}|${gi}" title="Editar ou excluir este item">${g.dia?`<span class="dia">${g.dia}</span>`:''}${esc(g.desc)}</button></td>${MS.map(m=>`<td class="${cl(m)}ed" data-ed="${tp}|${gi}|${m}" title="Clique para editar ${esc(mLbl(m))}">${num(g.vals[m]||0)}</td>`).join('')}</tr>`).join('');
-  const lrow=lanc.map((g,gi)=>`<tr><td title="Vem dos seus lançamentos">${esc(g.desc)}</td>${MS.map(m=>{const x=g.vals[m]||0;return `<td class="${cl(m)}${x?'lc':''}" ${x?`data-lc="${gi}|${m}" title="Ver a fatura"`:''}>${num(x)}</td>`}).join('')}</tr>`).join('');
+  const erow=(arr,tp)=>arr.map((g,gi)=>`<tr><td><button class="lnk" data-eit="${tp}|${gi}" title="Editar ou excluir este item">${g.dia?`<span class="dia">${g.dia}</span>`:''}${esc(g.desc)}</button></td>${MS.map(m=>{const rw=g.raw[m]||0,z0=Z&&g.pg[m]&&rw;return `<td class="${cl(m)}ed" data-ed="${tp}|${gi}|${m}" title="${z0?(tp==='R'?'Recebido':'Pago')+' — zerado nas somas. ':''}Clique para editar ${esc(mLbl(m))}">${z0?`<span class="pg">✓ <s>${numf(rw)}</s></span>`:num(g.vals[m]||0)}</td>`}).join('')}</tr>`).join('');
+  const lrow=lanc.map((g,gi)=>`<tr><td title="Vem dos seus lançamentos">${esc(g.desc)}</td>${MS.map(m=>{const x=g.vals[m]||0,rw=g.raw[m]||0;return `<td class="${cl(m)}${rw?'lc':''}" ${rw?`data-lc="${gi}|${m}" title="${x<rw-0.004?(x?'Parte já paga (zerada). ':'Tudo pago — zerado. ')+'Total da fatura: '+brl(rw)+'. ':''}Ver a fatura"`:''}>${rw&&!x?`<span class="pg">✓ <s>${numf(rw)}</s></span>`:num(x)}</td>`}).join('')}</tr>`).join('');
   const trow=(label,arr,cls)=>`<tr class="tot"><td>${label}</td>${arr.map((x,i)=>`<td class="${cl(MS[i])}${cls?(x<0?'neg':'pos'):''}">${numf(x)}</td>`).join('')}</tr>`;
   v.innerHTML=ctrl(head)+`
   <div class="grid kpis">
-   <div class="card kpi"><div class="lbl">Receitas previstas</div><div class="val">${brl(sR)}</div><div class="sub">${mLbl(first)} a ${mLbl(last)} · ${MS.length} meses</div></div>
-   <div class="card kpi"><div class="lbl">Despesas (lançadas + previstas)</div><div class="val">${brl(sD)}</div><div class="sub">${brl(sum(tL,x=>x))} lançadas · ${brl(sum(tP,x=>x))} previstas</div></div>
+   <div class="card kpi"><div class="lbl">Receitas previstas</div><div class="val">${brl(sR)}</div><div class="sub">${mLbl(first)} a ${mLbl(last)} · ${MS.length} meses${Z&&zR?' · '+brl(zR)+' já recebido (zerado)':''}</div></div>
+   <div class="card kpi"><div class="lbl">Despesas (lançadas + previstas)</div><div class="val">${brl(sD)}</div><div class="sub">${brl(sum(tL,x=>x))} lançadas · ${brl(sum(tP,x=>x))} previstas${Z&&zD?' · '+brl(zD)+' já pago (zerado)':''}</div></div>
    <div class="card kpi"><div class="lbl">Saldo no período</div><div class="val">${sgn(sS)}</div><div class="sub">média de ${brlk(sS/MS.length)} por mês</div></div>
    <div class="card kpi"><div class="lbl">Meses no vermelho</div><div class="val ${neg.length?'up':''}">${neg.length}</div><div class="sub">${neg.length?'primeiro: '+mLbl(neg[0]):'nenhum no período'}</div></div>
   </div>
@@ -702,9 +708,10 @@ function vProj(){
     ${trow('SALDO (R − D)',sal,1)}
     ${trow('ACUMULADO',ac,1)}
    </tbody></table></div>
-   <div class="hint" style="margin-top:8px">As despesas <b>lançadas</b> vêm sozinhas dos seus lançamentos (valor da parcela no mês de pagamento). Use as <b>previstas</b> para o que ainda não foi lançado (IPVA, DAS, mercado…). Não coloque a mesma despesa nos dois lugares, senão ela conta em dobro. O acumulado soma os saldos a partir de ${mLbl(first)}.</div></div>`;
+   <div class="hint" style="margin-top:8px">As despesas <b>lançadas</b> vêm sozinhas dos seus lançamentos (valor da parcela no mês de pagamento). Use as <b>previstas</b> para o que ainda não foi lançado (IPVA, DAS, mercado…). Não coloque a mesma despesa nos dois lugares, senão ela conta em dobro. O acumulado soma os saldos a partir de ${mLbl(first)}.<br>Com <b>Zerar pagos/recebidos</b> ligado, lançamentos com status <b>Pago</b> e itens marcados como recebidos/pagos (clique na célula) saem das somas e aparecem riscados com ✓. Desligue para ver o valor cheio.</div></div>`;
   // controles
   v.querySelectorAll('[data-ps]').forEach(b=>b.onclick=()=>{const k=+b.dataset.ps;P.start=k?addM(first,k):CUR;render();saveUI();});
+  document.getElementById('pj-z').onchange=e=>{P.z=e.target.checked;render();saveUI();};
   document.getElementById('pj-n').onchange=e=>{P.n=+e.target.value;render();saveUI();};
   document.getElementById('pj-ar').onclick=()=>openProjNew('R');
   document.getElementById('pj-ad').onclick=()=>openProjNew('D');
@@ -722,21 +729,24 @@ function vProj(){
   }
 }
 /* grava itens da projeção (otimista) */
-function applyProj(tp,desc,dia,months,val,msg){
+function applyProj(tp,desc,dia,months,val,msg,pago){
   const set=new Set(months);
+  const was={};proj.forEach(x=>{if(x.t===tp&&x.desc===desc&&set.has(x.m))was[x.m]=!!x.pg;});
+  const pg=m=>pago===undefined?!!was[m]:!!pago;
   proj=proj.filter(x=>!(x.t===tp&&x.desc===desc&&set.has(x.m)));
-  if(val>0)months.forEach(m=>proj.push({id:-Date.now()-Math.random(),t:tp,desc,dia:dia||null,m,v:val}));
+  if(val>0)months.forEach(m=>proj.push({id:-Date.now()-Math.random(),t:tp,desc,dia:dia||null,m,v:val,pg:pg(m)}));
   render();
   return run(async()=>{
     for(const c of chunk(months.map(m=>m+'-01'),200))ok(await sb.from('projecao').delete().eq('tipo',tp).eq('descricao',desc).in('mes',c));
-    if(val>0)for(const c of chunk(months,200))ok(await sb.from('projecao').insert(c.map(m=>Object.assign({user_id:USER.id},toDbP({t:tp,desc,dia,m,v:val})))));
+    if(val>0)for(const c of chunk(months,200))ok(await sb.from('projecao').insert(c.map(m=>Object.assign({user_id:USER.id},toDbP({t:tp,desc,dia,m,v:val,pg:pg(m)})))));
   },msg||'Projeção atualizada');
 }
 function monthsBetween(a,b){if(b<a)b=a;const l=[];for(let x=a;x<=b&&l.length<120;x=addM(x,1))l.push(x);return l;}
 function openCellEdit(tp,gi,m){
-  const g=(tp==='R'?PV.rec:PV.prev)[gi];if(!g)return;const last=PV.MS[PV.MS.length-1];const cur=g.vals[m]||0;
+  const g=(tp==='R'?PV.rec:PV.prev)[gi];if(!g)return;const last=PV.MS[PV.MS.length-1];const cur=g.raw[m]||0,curPg=!!g.pg[m];
   modal(`<h2>${esc(g.desc)} · ${mLong(m)}</h2><form class="form" id="fce" style="grid-template-columns:1fr">
    <div class="fld"><label>Valor (R$) — vazio ou 0 remove o valor</label><input id="ce-v" inputmode="decimal" value="${cur?numf(cur):''}"></div>
+   <div class="fld"><label style="display:flex;gap:8px;align-items:center;cursor:pointer"><input type="checkbox" id="ce-pg" ${curPg?'checked':''} style="width:auto"> ${tp==='R'?'Já recebido':'Já pago'} <span class="hint">(zera nas somas)</span></label></div>
    <div class="fld"><label>Aplicar em</label><select id="ce-r"><option value="one">Só ${mLbl(m)}</option><option value="end">${mLbl(m)} até ${mLbl(last)} (fim do quadro)</option><option value="custom">${mLbl(m)} até um mês que eu escolher</option></select></div>
    <div class="fld" id="ce-w" style="display:none"><label>Até o mês</label><input id="ce-to" type="month" value="${last}"></div>
    <div class="actions"><button type="button" class="btn" data-x>Cancelar</button><button class="btn pri" type="submit">Salvar</button></div></form>`);
@@ -744,7 +754,7 @@ function openCellEdit(tp,gi,m){
   q('ce-r').onchange=()=>{q('ce-w').style.display=q('ce-r').value==='custom'?'':'none';};
   document.querySelector('#modal [data-x]').onclick=closeModal;
   q('fce').onsubmit=e=>{e.preventDefault();const val=pv(q('ce-v').value);const r=q('ce-r').value;
-    const to=r==='one'?m:r==='end'?last:(q('ce-to').value||m);closeModal();applyProj(tp,g.desc,g.dia,monthsBetween(m,to),r2(val));};
+    const to=r==='one'?m:r==='end'?last:(q('ce-to').value||m);const pgv=q('ce-pg').checked;closeModal();applyProj(tp,g.desc,g.dia,monthsBetween(m,to),r2(val),undefined,pgv===curPg?undefined:pgv);};
 }
 function openProjNew(tp){
   const first=PV.MS[0]||CUR,last=PV.MS[PV.MS.length-1]||CUR;
@@ -896,7 +906,7 @@ function importFile(file){
     if(/\.json$/i.test(file.name)){
       const j=JSON.parse(new TextDecoder().decode(fr.result));
       (j.despesas||[]).forEach(x=>{const r=fromDb(x);if(exists(r)){skip++;return}add.push(r);});
-      bud=j.orcamentos||null;pjb=Array.isArray(j.projecao)&&j.projecao.length?j.projecao.map(x=>({t:x.tipo,desc:x.descricao,dia:x.dia,m:String(x.mes).slice(0,7),v:+x.valor})):null;
+      bud=j.orcamentos||null;pjb=Array.isArray(j.projecao)&&j.projecao.length?j.projecao.map(x=>({t:x.tipo,desc:x.descricao,dia:x.dia,m:String(x.mes).slice(0,7),v:+x.valor,pg:!!x.pago})):null;
     }else{
       if(typeof XLSX==='undefined')throw new Error('biblioteca de planilha não carregou');
       const wb=XLSX.read(new Uint8Array(fr.result),{type:'array',cellDates:true});
