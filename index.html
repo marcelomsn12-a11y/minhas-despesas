@@ -27,7 +27,7 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-button,input,select{font:inherit;color:inherit}
+button,input,select,textarea{font:inherit;color:inherit}
 .app{display:flex;min-height:100vh}
 .side{width:220px;flex:none;background:var(--surface);border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:4px}
 .brand{font-weight:700;font-size:16px;padding:4px 10px 16px;display:flex;align-items:center;gap:8px}
@@ -118,7 +118,8 @@ tbody tr:hover{background:var(--surface-2)}
 .fld{display:flex;flex-direction:column;gap:4px}
 .fld label{font-size:12px;color:var(--text-2);font-weight:500}
 .fld.full{grid-column:1/-1}
-.fld input,.fld select{width:100%}
+.fld input,.fld select,.fld textarea{width:100%}
+.fld textarea{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:8px 10px;resize:vertical;min-height:64px}
 .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
 .actions .left{margin-right:auto}
 .hint{font-size:12px;color:var(--muted)}
@@ -192,6 +193,8 @@ tbody tr:hover{background:var(--surface-2)}
 .proj .lnk:hover{text-decoration:underline}
 .proj .pg{color:var(--muted)}.proj .pg s{text-decoration-thickness:1px}
 .zsw{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-2);cursor:pointer;white-space:nowrap}.zsw input{width:auto;margin:0}
+.proj td.hasobs{position:relative}
+.proj td.hasobs::after{content:'';position:absolute;top:0;right:0;border-style:solid;border-width:0 7px 7px 0;border-color:transparent var(--warn) transparent transparent}
 .proj .dia{color:var(--muted);margin-right:6px;font-variant-numeric:tabular-nums}
 .pjctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .pjctl select{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:7px 8px}
@@ -540,7 +543,7 @@ function filtered(){
 function vLanc(){
   const v=document.getElementById('view');const f=UI.f;
   const ms=months().reverse();
-  v.innerHTML=header('Lançamentos')+`
+  v.innerHTML=header('Lançamentos','<button class="btn" id="lx" title="Exporta os lançamentos do filtro atual">⤓ Exportar Excel</button>')+`
   <div class="card">
    <div class="filters">
     <input type="search" id="fq" placeholder="Buscar descrição ou categoria…" value="${esc(f.q)}">
@@ -555,6 +558,7 @@ function vLanc(){
    <div class="more" id="lmore"></div>
   </div>`;
   bindHeader(v);
+  document.getElementById('lx').onclick=()=>{const a=filtered();if(!a.length){toast('Nenhum lançamento no filtro atual.');return;}exportX(a,'lancamentos-'+new Date().toISOString().slice(0,10)+'.xlsx');toast(a.length.toLocaleString('pt-BR')+' lançamentos exportados');};
   const upd=()=>{UI.limit=150;UI.sel.clear();drawTable();saveUI();};
   let qt;document.getElementById('fq').oninput=e=>{clearTimeout(qt);qt=setTimeout(()=>{f.q=e.target.value;upd()},200)};
   [['fm','m'],['fc','cat'],['fk','card'],['fs','s']].forEach(([id,k])=>document.getElementById(id).onchange=e=>{f[k]=e.target.value;if(k==='m'){f.de='';f.ate='';}upd()});
@@ -648,12 +652,12 @@ function vParc(){
 }
 
 /* ---------- PROJEÇÃO ---------- */
-const fromDbP=x=>({id:x.id,t:x.tipo,desc:x.descricao,dia:x.dia,m:String(x.mes).slice(0,7),v:+x.valor,pg:!!x.pago});
-const toDbP=r=>({tipo:r.t,descricao:r.desc,dia:r.dia||null,mes:r.m+'-01',valor:r2(r.v),pago:!!r.pg});
+const fromDbP=x=>({id:x.id,t:x.tipo,desc:x.descricao,dia:x.dia,m:String(x.mes).slice(0,7),v:+x.valor,pg:!!x.pago,obs:x.obs||''});
+const toDbP=r=>({tipo:r.t,descricao:r.desc,dia:r.dia||null,mes:r.m+'-01',valor:r2(r.v),pago:!!r.pg,obs:(r.obs||'').trim()||null});
 const numf=v=>v.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 let PV={rec:[],prev:[],lanc:[],MS:[]};
 function projMonths(){const P=UI.pj,s=P.start||CUR,a=[];for(let i=0;i<P.n;i++)a.push(addM(s,i));return a;}
-function groupProj(t,z){const g={};proj.filter(x=>x.t===t).forEach(x=>{const o=g[x.desc]||(g[x.desc]={desc:x.desc,dia:x.dia,vals:{},raw:{},pg:{}});o.raw[x.m]=(o.raw[x.m]||0)+x.v;o.pg[x.m]=!!x.pg;o.vals[x.m]=(z&&x.pg)?0:o.raw[x.m];if(x.dia&&!o.dia)o.dia=x.dia;});
+function groupProj(t,z){const g={};proj.filter(x=>x.t===t).forEach(x=>{const o=g[x.desc]||(g[x.desc]={desc:x.desc,dia:x.dia,vals:{},raw:{},pg:{},obs:{}});o.raw[x.m]=(o.raw[x.m]||0)+x.v;o.pg[x.m]=!!x.pg;if(x.obs)o.obs[x.m]=x.obs;o.vals[x.m]=(z&&x.pg)?0:o.raw[x.m];if(x.dia&&!o.dia)o.dia=x.dia;});
   return Object.values(g).sort((a,b)=>(a.dia||99)-(b.dia||99)||a.desc.localeCompare(b.desc,'pt-BR'));}
 function vProj(){
   const v=document.getElementById('view');const P=UI.pj;
@@ -680,7 +684,7 @@ function vProj(){
    <button class="btn" id="pj-ar">+ Receita</button><button class="btn" id="pj-ad">+ Despesa prevista</button></div>`;
   const cl=(m)=>m===CUR?'cm ':'';
   const num=x=>x?numf(x):'<span class="muted">–</span>';
-  const erow=(arr,tp)=>arr.map((g,gi)=>`<tr><td><button class="lnk" data-eit="${tp}|${gi}" title="Editar ou excluir este item">${g.dia?`<span class="dia">${g.dia}</span>`:''}${esc(g.desc)}</button></td>${MS.map(m=>{const rw=g.raw[m]||0,z0=Z&&g.pg[m]&&rw;return `<td class="${cl(m)}ed" data-ed="${tp}|${gi}|${m}" title="${z0?(tp==='R'?'Recebido':'Pago')+' — zerado nas somas. ':''}Clique para editar ${esc(mLbl(m))}">${z0?`<span class="pg">✓ <s>${numf(rw)}</s></span>`:num(g.vals[m]||0)}</td>`}).join('')}</tr>`).join('');
+  const erow=(arr,tp)=>arr.map((g,gi)=>`<tr><td><button class="lnk" data-eit="${tp}|${gi}" title="Editar ou excluir este item">${g.dia?`<span class="dia">${g.dia}</span>`:''}${esc(g.desc)}</button></td>${MS.map(m=>{const rw=g.raw[m]||0,z0=Z&&g.pg[m]&&rw,ob=g.obs[m];return `<td class="${cl(m)}ed${ob?' hasobs':''}" data-ed="${tp}|${gi}|${m}" title="${ob?'Obs.: '+esc(ob)+'&#10;':''}${z0?(tp==='R'?'Recebido':'Pago')+' — zerado nas somas. ':''}Clique para editar ${esc(mLbl(m))}">${z0?`<span class="pg">✓ <s>${numf(rw)}</s></span>`:num(g.vals[m]||0)}</td>`}).join('')}</tr>`).join('');
   const lrow=lanc.map((g,gi)=>`<tr><td title="Vem dos seus lançamentos">${esc(g.desc)}</td>${MS.map(m=>{const x=g.vals[m]||0,rw=g.raw[m]||0;return `<td class="${cl(m)}${rw?'lc':''}" ${rw?`data-lc="${gi}|${m}" title="${x<rw-0.004?(x?'Parte já paga (zerada). ':'Tudo pago — zerado. ')+'Total da fatura: '+brl(rw)+'. ':''}Ver a fatura"`:''}>${rw&&!x?`<span class="pg">✓ <s>${numf(rw)}</s></span>`:num(x)}</td>`}).join('')}</tr>`).join('');
   const trow=(label,arr,cls)=>`<tr class="tot"><td>${label}</td>${arr.map((x,i)=>`<td class="${cl(MS[i])}${cls?(x<0?'neg':'pos'):''}">${numf(x)}</td>`).join('')}</tr>`;
   v.innerHTML=ctrl(head)+`
@@ -729,24 +733,26 @@ function vProj(){
   }
 }
 /* grava itens da projeção (otimista) */
-function applyProj(tp,desc,dia,months,val,msg,pago){
+function applyProj(tp,desc,dia,months,val,msg,pago,obsSet){
   const set=new Set(months);
-  const was={};proj.forEach(x=>{if(x.t===tp&&x.desc===desc&&set.has(x.m))was[x.m]=!!x.pg;});
+  const was={},wasO={};proj.forEach(x=>{if(x.t===tp&&x.desc===desc&&set.has(x.m)){was[x.m]=!!x.pg;if(x.obs)wasO[x.m]=x.obs;}});
   const pg=m=>pago===undefined?!!was[m]:!!pago;
+  const ob=m=>obsSet&&m in obsSet?obsSet[m]:(wasO[m]||'');
   proj=proj.filter(x=>!(x.t===tp&&x.desc===desc&&set.has(x.m)));
-  if(val>0)months.forEach(m=>proj.push({id:-Date.now()-Math.random(),t:tp,desc,dia:dia||null,m,v:val,pg:pg(m)}));
+  if(val>0)months.forEach(m=>proj.push({id:-Date.now()-Math.random(),t:tp,desc,dia:dia||null,m,v:val,pg:pg(m),obs:ob(m)}));
   render();
   return run(async()=>{
     for(const c of chunk(months.map(m=>m+'-01'),200))ok(await sb.from('projecao').delete().eq('tipo',tp).eq('descricao',desc).in('mes',c));
-    if(val>0)for(const c of chunk(months,200))ok(await sb.from('projecao').insert(c.map(m=>Object.assign({user_id:USER.id},toDbP({t:tp,desc,dia,m,v:val,pg:pg(m)})))));
+    if(val>0)for(const c of chunk(months,200))ok(await sb.from('projecao').insert(c.map(m=>Object.assign({user_id:USER.id},toDbP({t:tp,desc,dia,m,v:val,pg:pg(m),obs:ob(m)})))));
   },msg||'Projeção atualizada');
 }
 function monthsBetween(a,b){if(b<a)b=a;const l=[];for(let x=a;x<=b&&l.length<120;x=addM(x,1))l.push(x);return l;}
 function openCellEdit(tp,gi,m){
-  const g=(tp==='R'?PV.rec:PV.prev)[gi];if(!g)return;const last=PV.MS[PV.MS.length-1];const cur=g.raw[m]||0,curPg=!!g.pg[m];
+  const g=(tp==='R'?PV.rec:PV.prev)[gi];if(!g)return;const last=PV.MS[PV.MS.length-1];const cur=g.raw[m]||0,curPg=!!g.pg[m],curObs=g.obs[m]||'';
   modal(`<h2>${esc(g.desc)} · ${mLong(m)}</h2><form class="form" id="fce" style="grid-template-columns:1fr">
    <div class="fld"><label>Valor (R$) — vazio ou 0 remove o valor</label><input id="ce-v" inputmode="decimal" value="${cur?numf(cur):''}"></div>
    <div class="fld"><label style="display:flex;gap:8px;align-items:center;cursor:pointer"><input type="checkbox" id="ce-pg" ${curPg?'checked':''} style="width:auto"> ${tp==='R'?'Já recebido':'Já pago'} <span class="hint">(zera nas somas)</span></label></div>
+   <div class="fld"><label>Observação (opcional) — vale só para ${mLbl(m)}</label><textarea id="ce-o" maxlength="500" rows="2" placeholder="Ex.: inclui 13º, reajuste de 5%, pago via Pix…">${esc(curObs)}</textarea></div>
    <div class="fld"><label>Aplicar em</label><select id="ce-r"><option value="one">Só ${mLbl(m)}</option><option value="end">${mLbl(m)} até ${mLbl(last)} (fim do quadro)</option><option value="custom">${mLbl(m)} até um mês que eu escolher</option></select></div>
    <div class="fld" id="ce-w" style="display:none"><label>Até o mês</label><input id="ce-to" type="month" value="${last}"></div>
    <div class="actions"><button type="button" class="btn" data-x>Cancelar</button><button class="btn pri" type="submit">Salvar</button></div></form>`);
@@ -754,7 +760,9 @@ function openCellEdit(tp,gi,m){
   q('ce-r').onchange=()=>{q('ce-w').style.display=q('ce-r').value==='custom'?'':'none';};
   document.querySelector('#modal [data-x]').onclick=closeModal;
   q('fce').onsubmit=e=>{e.preventDefault();const val=pv(q('ce-v').value);const r=q('ce-r').value;
-    const to=r==='one'?m:r==='end'?last:(q('ce-to').value||m);const pgv=q('ce-pg').checked;closeModal();applyProj(tp,g.desc,g.dia,monthsBetween(m,to),r2(val),undefined,pgv===curPg?undefined:pgv);};
+    const to=r==='one'?m:r==='end'?last:(q('ce-to').value||m);const pgv=q('ce-pg').checked;const ov=q('ce-o').value.trim().slice(0,500);
+    if(!(val>0)&&ov){q('ce-v').focus();toast('Informe um valor para guardar a observação.');return;}
+    closeModal();applyProj(tp,g.desc,g.dia,monthsBetween(m,to),r2(val),undefined,pgv===curPg?undefined:pgv,ov===curObs?undefined:{[m]:ov});};
 }
 function openProjNew(tp){
   const first=PV.MS[0]||CUR,last=PV.MS[PV.MS.length-1]||CUR;
@@ -795,6 +803,9 @@ function exportProj(){
   const {MS,rec,prev,lanc,tR,tD,sal,ac}=PV;const L=g=>[(g.dia?g.dia+' · ':'')+g.desc,...MS.map(m=>g.vals[m]||0)];
   const aoa=[['PROJEÇÃO',...MS.map(mLbl)],['RECEITAS'],...rec.map(L),['TOTAL (R)',...tR],[],['DESPESAS'],['Lançadas no sistema (por cartão)'],...lanc.map(L),['Previstas'],...prev.map(L),['TOTAL (D)',...tD],[],['SALDO (R − D)',...sal],['ACUMULADO',...ac]];
   const ws=XLSX.utils.aoa_to_sheet(aoa);Object.keys(ws).forEach(k=>{if(k[0]!=='!'&&ws[k].t==='n')ws[k].z='#,##0.00';});
+  const prev0=2+rec.length+4+lanc.length+1; // linha (0-based) da 1ª despesa prevista
+  const addObs=(arr,r0)=>arr.forEach((g,i)=>MS.forEach((m,ci)=>{const o=g.obs&&g.obs[m];if(!o)return;const a=XLSX.utils.encode_cell({r:r0+i,c:ci+1});ws[a]=ws[a]||{t:'n',v:0,z:'#,##0.00'};ws[a].c=[{a:'Obs.',t:o}];ws[a].c.hidden=true;}));
+  addObs(rec,2);addObs(prev,prev0);
   ws['!cols']=[{wch:34},...MS.map(()=>({wch:12}))];
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Projeção');
   download(new Blob([XLSX.write(wb,{bookType:'xlsx',type:'array'})],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'projecao.xlsx');
@@ -906,7 +917,7 @@ function importFile(file){
     if(/\.json$/i.test(file.name)){
       const j=JSON.parse(new TextDecoder().decode(fr.result));
       (j.despesas||[]).forEach(x=>{const r=fromDb(x);if(exists(r)){skip++;return}add.push(r);});
-      bud=j.orcamentos||null;pjb=Array.isArray(j.projecao)&&j.projecao.length?j.projecao.map(x=>({t:x.tipo,desc:x.descricao,dia:x.dia,m:String(x.mes).slice(0,7),v:+x.valor,pg:!!x.pago})):null;
+      bud=j.orcamentos||null;pjb=Array.isArray(j.projecao)&&j.projecao.length?j.projecao.map(x=>({t:x.tipo,desc:x.descricao,dia:x.dia,m:String(x.mes).slice(0,7),v:+x.valor,pg:!!x.pago,obs:x.obs||''})):null;
     }else{
       if(typeof XLSX==='undefined')throw new Error('biblioteca de planilha não carregou');
       const wb=XLSX.read(new Uint8Array(fr.result),{type:'array',cellDates:true});
