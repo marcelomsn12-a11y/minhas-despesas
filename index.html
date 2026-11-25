@@ -257,7 +257,7 @@ const CATFIX={'saque':'Saque','beleza':'Beleza','lazer':'Lazer','anuidade':'Anui
 const normCat=c=>{c=String(c??'').replace(/\s+/g,' ').trim();return CATFIX[c.toLowerCase()]??c;};
 
 /* ---------- estado ---------- */
-let sb=null, USER=null, rows=[], budgets={}, lims={}, limOk=true, proj=[], projOk=true, loaded=false;
+let sb=null, USER=null, rows=[], budgets={}, lims={}, ccfg={}, limOk=true, proj=[], projOk=true, loaded=false;
 const cats=()=>uniq(rows.map(r=>r.cat)).sort((a,b)=>a.localeCompare(b,'pt-BR'));
 const cards=()=>uniq(rows.map(r=>r.card)).sort();
 const months=()=>uniq(rows.map(r=>r.m)).sort();
@@ -275,7 +275,7 @@ async function loadAll(){
   const b=ok(await sb.from('orcamentos').select('*'));budgets={};b.data.forEach(x=>budgets[x.categoria]=+x.limite);
   try{let pa=[],pf=0;for(;;){const {data}=ok(await sb.from('projecao').select('*').order('id',{ascending:true}).range(pf,pf+999));pa=pa.concat(data);if(data.length<1000)break;pf+=1000;}
     proj=pa.map(fromDbP);projOk=true;}catch(e){proj=[];projOk=false;}
-  try{const l=ok(await sb.from('limites_cartao').select('*'));lims={};l.data.forEach(x=>lims[x.cartao]=+x.limite);limOk=true;}catch(e){lims={};limOk=false;}
+  try{const l=ok(await sb.from('limites_cartao').select('*'));lims={};ccfg={};l.data.forEach(x=>{if(+x.limite>0)lims[x.cartao]=+x.limite;if(x.dia_fechamento||x.dia_vencimento)ccfg[x.cartao]={fec:x.dia_fechamento||null,ven:x.dia_vencimento||null};});limOk=true;}catch(e){lims={};ccfg={};limOk=false;}
   loaded=true;
 }
 async function reload(){try{await loadAll();}catch(e){toast('Erro ao carregar: '+(e.message||e));}render();}
@@ -304,10 +304,33 @@ function setBudget(cat,val){
   return run(async()=>{if(val>0)ok(await sb.from('orcamentos').upsert({categoria:cat,limite:val},{onConflict:'user_id,categoria'}));else ok(await sb.from('orcamentos').delete().eq('categoria',cat));},'Limite de '+cat+' atualizado');
 }
 
-function setLimit(card,val){
-  if(val>0)lims[card]=val;else delete lims[card];render();
-  return run(async()=>{if(val>0)ok(await sb.from('limites_cartao').upsert({cartao:card,limite:val},{onConflict:'user_id,cartao'}));else ok(await sb.from('limites_cartao').delete().eq('cartao',card));},val>0?'Limite do '+card+' atualizado':'Limite do '+card+' removido');
+/* ---------- cartões: limite, fechamento e vencimento ---------- */
+const dbCard=c=>({cartao:c,limite:lims[c]||null,dia_fechamento:(ccfg[c]&&ccfg[c].fec)||null,dia_vencimento:(ccfg[c]&&ccfg[c].ven)||null});
+function saveCard(card,o,msg){
+  if('lim' in o){if(o.lim>0)lims[card]=o.lim;else delete lims[card];}
+  if('fec' in o||'ven' in o){const c=Object.assign({},ccfg[card],o);delete c.lim;if(c.fec||c.ven)ccfg[card]={fec:c.fec||null,ven:c.ven||null};else delete ccfg[card];}
+  render();const row=dbCard(card),empty=!row.limite&&!row.dia_fechamento&&!row.dia_vencimento;
+  return run(async()=>{if(empty)ok(await sb.from('limites_cartao').delete().eq('cartao',card));else ok(await sb.from('limites_cartao').upsert(row,{onConflict:'user_id,cartao'}));},msg);
 }
+function setLimit(card,val){return saveCard(card,{lim:val},val>0?'Limite do '+card+' atualizado':'Limite do '+card+' removido');}
+const lastDay=ym=>{const [y,m]=ym.split('-').map(Number);return new Date(y,m,0).getDate();};
+const todayStr=()=>{const d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*6e4).toISOString().slice(0,10);};
+/* em que mês vence a fatura de uma compra feita em `d` no cartão `card` (null se o cartão não tem fechamento/vencimento) */
+function dueMonth(card,d){
+  const c=ccfg[String(card||'').trim().toUpperCase()];if(!c||!c.fec||!c.ven||!d)return null;
+  const ym=d.slice(0,7),day=+d.slice(8,10),fec=Math.min(c.fec,lastDay(ym));
+  const closeM=day>=fec?addM(ym,1):ym;            // compra no dia do fechamento ou depois cai na próxima fatura
+  return c.ven>c.fec?closeM:addM(closeM,1);       // vencimento antes do fechamento = mês seguinte ao fechamento
+}
+const dueDate=(card,m)=>{const c=ccfg[card];if(!c||!c.ven)return null;return m+'-'+String(Math.min(c.ven,lastDay(m))).padStart(2,'0');};
+/* marca como Atrasado o que está Em aberto e já passou do vencimento (só cartões com vencimento cadastrado) */
+function autoLate(){
+  const t=todayStr();const ids=rows.filter(r=>r.s==='A'&&ccfg[r.card]&&ccfg[r.card].ven&&dueDate(r.card,r.m)<t).map(r=>r.id);
+  if(ids.length)updRows(ids,{s:'T'},ids.length+(ids.length>1?' parcelas venceram e foram marcadas':' parcela venceu e foi marcada')+' como Atrasado');
+}
+/* quanto sobra no limite do cartão depois de somar `extra` em aberto */
+function limLeft(card,extra){card=String(card||'').trim().toUpperCase();const L=lims[card];if(!L)return null;
+  return L-sum(rows.filter(r=>r.card===card&&r.s!=='P'),r=>r.v)-(extra||0);}
 
 /* ---------- UI state ---------- */
 let UI={tab:'painel',month:CUR,pj:{start:'',n:12,z:true},per:{mode:'mes',year:now.getFullYear(),from:'',to:''},f:{q:'',m:'',cat:'',card:'',s:''},sort:{k:'d',dir:-1},limit:150,sel:new Set()};
@@ -385,7 +408,7 @@ async function start(){
 async function boot(){
   showMsg('<p class="hint">Carregando seus lançamentos…</p>');
   try{await loadAll();}catch(e){showMsg('<p>Não consegui ler o banco: '+esc(e.message||e)+'</p><p class="hint">Confira se você rodou o schema.sql no Supabase.</p><button class="btn" id="lo">Sair</button>');document.getElementById('lo').onclick=logout;return;}
-  shell();render();
+  shell();render();autoLate();
 }
 
 /* ---------- shell ---------- */
@@ -671,14 +694,14 @@ function vCart(){
   const tL=sum(withL,c=>lims[c]),tU=sum(withL,c=>(A[c]||z).tot),tD=tL-tU;
   const alert=withL.filter(c=>(A[c]||z).tot/lims[c]>=.8);
   const line=c=>{const a=A[c]||z,L=+lims[c]||0,p=L?a.tot/L*100:0,d=L-a.tot;const cls=!L?'':p>100?'over':p>=80?'warn':'ok';
-    return `<div class="brow cw"><div><button class="lnk n" data-goc="${esc(c)}" title="Ver lançamentos em aberto deste cartão" style="border:0;background:none;padding:0;cursor:pointer;font:inherit;font-weight:500;text-align:left">${esc(c)}</button>${L?`<div class="st ${cls}">${p>100?'✕ estourou '+brl(-d):Math.round(p)+'% usado'}</div>`:'<div class="small">sem limite</div>'}</div>
+    return `<div class="brow cw"><div><button class="lnk n" data-goc="${esc(c)}" title="Ver lançamentos em aberto deste cartão" style="border:0;background:none;padding:0;cursor:pointer;font:inherit;font-weight:500;text-align:left">${esc(c)}</button>${L?`<div class="st ${cls}">${p>100?'✕ estourou '+brl(-d):Math.round(p)+'% usado'}</div>`:'<div class="small">sem limite</div>'}<button class="lnk small" data-cfg="${esc(c)}" style="border:0;background:none;padding:0;cursor:pointer;font-size:12px;color:var(--accent);text-align:left">${ccfg[c]?`fecha dia ${ccfg[c].fec||'?'} · vence dia ${ccfg[c].ven||'?'}`:'definir fechamento e vencimento'}</button></div>
     <div class="barcell">${L?`<div class="bar ${cls}"><div style="width:${Math.min(100,p)}%"></div></div>`:''}<div class="small" style="margin-top:3px">${a.n?`fatura atual ${brl(a.now)}${a.fut?' · próximas '+brl(a.fut):''}${a.late?' · <span class="up">atrasado '+brl(a.late)+'</span>':''}`:'nada em aberto'}</div></div>
     <div style="text-align:right"><b>${brl(a.tot)}</b><div class="small">${L?`<span class="${d<0?'up':'down'}">disponível ${d<0?'−':''}${brl(Math.abs(d))}</span>`:'em aberto'}</div></div>
     <div><input inputmode="decimal" data-lim="${esc(c)}" value="${L?String(L).replace('.',','):''}" placeholder="limite"></div></div>`;};
   const head=`<div class="brow cw bh" style="font-size:12px;color:var(--text-2);font-weight:600;padding-top:0"><span>Cartão</span><span class="barcell">Uso do limite</span><span style="text-align:right">Em aberto</span><span style="text-align:right">Limite total (R$)</span></div>`;
   v.innerHTML=header('Limites dos cartões')+`
   <div class="grid kpis">
-   <div class="card kpi"><div class="lbl">Limite total</div><div class="val">${brl(tL)}</div><div class="sub">${withL.length} cartões com limite</div></div>
+   <div class="card kpi"><div class="lbl">Limite total</div><div class="val">${brl(tL)}</div><div class="sub">${withL.length} ${withL.length===1?'cartão':'cartões'} com limite</div></div>
    <div class="card kpi"><div class="lbl">Em aberto (consumindo)</div><div class="val">${brl(tU)}</div><div class="sub">${tL?Math.round(tU/tL*100)+'% do limite':'defina os limites abaixo'}</div></div>
    <div class="card kpi"><div class="lbl">Limite disponível</div><div class="val ${tD<0?'up':''}">${tD<0?'−':''}${brl(Math.abs(tD))}</div><div class="sub">somando todos os cartões</div></div>
    <div class="card kpi"><div class="lbl">Cartões com 80%+ usado</div><div class="val ${alert.length?'up':''}">${alert.length}</div><div class="sub">${alert.slice(0,3).map(esc).join(', ')||'todos com folga'}</div></div>
@@ -688,7 +711,26 @@ function vCart(){
   <div class="hint" style="margin-top:10px">Consome o limite tudo o que está <b>Em aberto</b> ou <b>Atrasado</b> nos lançamentos, inclusive as parcelas futuras, como acontece no banco. Quando você marca uma fatura como paga, o valor volta para o disponível. Deixe o campo vazio para remover o limite.</div>`;
   bindHeader(v);
   v.querySelectorAll('[data-lim]').forEach(i=>i.onchange=()=>setLimit(i.dataset.lim,r2(pv(i.value))));
+  v.querySelectorAll('[data-cfg]').forEach(b=>b.onclick=()=>openCardCfg(b.dataset.cfg));
   v.querySelectorAll('[data-goc]').forEach(b=>b.onclick=()=>{UI.f={q:'',m:'',cat:'',card:b.dataset.goc,s:''};UI.limit=150;UI.sel.clear();UI.sort={k:'m',dir:1};saveUI();go('lancamentos');});
+}
+function openCardCfg(c){
+  const k=ccfg[c]||{},L=lims[c]||0;
+  modal(`<h2>${esc(c)}</h2><form class="form" id="fcc">
+   <div class="fld full"><label>Limite total (R$)</label><input id="cc-l" inputmode="decimal" value="${L?String(L).replace('.',','):''}" placeholder="vazio = sem limite"></div>
+   <div class="fld"><label>Dia do fechamento</label><input id="cc-f" type="number" min="1" max="31" value="${k.fec||''}"></div>
+   <div class="fld"><label>Dia do vencimento</label><input id="cc-v" type="number" min="1" max="31" value="${k.ven||''}"></div>
+   <div class="fld full hint" id="cc-h"></div>
+   <div class="actions full" style="grid-column:1/-1"><button type="button" class="btn" data-x>Cancelar</button><button class="btn pri" type="submit">Salvar</button></div></form>`);
+  const q=id=>document.getElementById(id);const dd=x=>{const n=+x;return n>=1&&n<=31?Math.round(n):null;};
+  const hint=()=>{const f=dd(q('cc-f').value),v=dd(q('cc-v').value);if(!f||!v){q('cc-h').innerHTML='Com os dois dias preenchidos, o sistema escolhe sozinho o mês de pagamento de cada compra nova e marca como <b>Atrasado</b> o que passar do vencimento sem pagar.';return;}
+    const old=ccfg[c];ccfg[c]={fec:f,ven:v};const t=todayStr(),m=dueMonth(c,t);if(old)ccfg[c]=old;else delete ccfg[c];
+    q('cc-h').innerHTML=`Compras até o dia ${f-1>0?f-1:'último'} entram na fatura que fecha no dia ${f}; a partir do dia ${f} vão para a próxima. Uma compra feita hoje vence em <b>${String(Math.min(v,lastDay(m))).padStart(2,'0')}/${m.slice(5)}/${m.slice(0,4)}</b>.`;};
+  ['cc-f','cc-v'].forEach(i=>q(i).oninput=hint);hint();
+  document.querySelector('#modal [data-x]').onclick=closeModal;
+  q('fcc').onsubmit=e=>{e.preventDefault();const f=dd(q('cc-f').value),v=dd(q('cc-v').value);
+    if((f&&!v)||(!f&&v)){q('cc-h').innerHTML='<span class="up">Preencha os dois dias (ou deixe os dois vazios).</span>';return;}
+    closeModal();saveCard(c,{lim:r2(pv(q('cc-l').value)),fec:f,ven:v},'Cartão '+c+' atualizado').then(autoLate);};
 }
 
 /* ---------- PROJEÇÃO ---------- */
@@ -895,7 +937,7 @@ function vDados(){
   bindHeader(v);
   document.getElementById('bx').onclick=()=>exportX(rows,'despesas.xlsx');
   document.getElementById('bxf').onclick=()=>exportX(filtered(),'despesas-filtro.xlsx');
-  document.getElementById('bj').onclick=()=>download(new Blob([JSON.stringify({versao:1,gerado_em:new Date().toISOString(),orcamentos:budgets,limites_cartao:lims,despesas:rows.map(toDb),projecao:proj.map(toDbP)},null,1)],{type:'application/json'}),'backup-despesas-'+new Date().toISOString().slice(0,10)+'.json');
+  document.getElementById('bj').onclick=()=>download(new Blob([JSON.stringify({versao:1,gerado_em:new Date().toISOString(),orcamentos:budgets,limites_cartao:lims,cartoes_cfg:ccfg,despesas:rows.map(toDb),projecao:proj.map(toDbP)},null,1)],{type:'application/json'}),'backup-despesas-'+new Date().toISOString().slice(0,10)+'.json');
   document.getElementById('fi').onchange=e=>importFile(e.target.files[0]);
   document.getElementById('blo').onclick=logout;
   document.getElementById('bpw').onclick=openPw;
@@ -928,13 +970,13 @@ function renameBox(field,old){
   document.getElementById('rok').onclick=()=>{let nv=document.getElementById('rn').value.trim();if(field==='card')nv=nv.toUpperCase();if(!nv||nv===old){closeModal();return;}
     closeModal();
     let n=0;rows.forEach(r=>{if(r[field]===old){r[field]=nv;n++}});
-    const col=COLS[field];const bOld=budgets[old];const lOld=field==='card'?lims[old]:null;
+    const col=COLS[field];const bOld=budgets[old];const lOld=field==='card'&&(lims[old]!=null||ccfg[old])?dbCard(old):null;
     if(field==='cat'&&bOld!=null){if(budgets[nv]==null)budgets[nv]=bOld;delete budgets[old];}
-    if(lOld!=null){if(lims[nv]==null)lims[nv]=lOld;delete lims[old];}
+    if(lOld){if(lims[nv]==null&&lims[old]!=null)lims[nv]=lims[old];if(!ccfg[nv]&&ccfg[old])ccfg[nv]=ccfg[old];delete lims[old];delete ccfg[old];}
     render();
     run(async()=>{ok(await sb.from('despesas').update({[col]:nv}).eq(col,old));
       if(field==='cat'&&bOld!=null){ok(await sb.from('orcamentos').upsert({categoria:nv,limite:budgets[nv]},{onConflict:'user_id,categoria'}));ok(await sb.from('orcamentos').delete().eq('categoria',old));}
-      if(lOld!=null){ok(await sb.from('limites_cartao').upsert({cartao:nv,limite:lims[nv]},{onConflict:'user_id,cartao'}));ok(await sb.from('limites_cartao').delete().eq('cartao',old));}},n+' lançamentos atualizados');};
+      if(lOld){ok(await sb.from('limites_cartao').upsert(dbCard(nv),{onConflict:'user_id,cartao'}));ok(await sb.from('limites_cartao').delete().eq('cartao',old));}},n+' lançamentos atualizados');};
 }
 function download(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);}
 function exportX(list,name){
@@ -959,7 +1001,7 @@ function importFile(file){
     if(/\.json$/i.test(file.name)){
       const j=JSON.parse(new TextDecoder().decode(fr.result));
       (j.despesas||[]).forEach(x=>{const r=fromDb(x);if(exists(r)){skip++;return}add.push(r);});
-      bud=j.orcamentos||null;lmb=j.limites_cartao&&Object.keys(j.limites_cartao).length?j.limites_cartao:null;pjb=Array.isArray(j.projecao)&&j.projecao.length?j.projecao.map(x=>({t:x.tipo,desc:x.descricao,dia:x.dia,m:String(x.mes).slice(0,7),v:+x.valor,pg:!!x.pago,obs:x.obs||''})):null;
+      bud=j.orcamentos||null;lmb=(j.limites_cartao&&Object.keys(j.limites_cartao).length)||(j.cartoes_cfg&&Object.keys(j.cartoes_cfg).length)?{l:j.limites_cartao||{},c:j.cartoes_cfg||{}}:null;pjb=Array.isArray(j.projecao)&&j.projecao.length?j.projecao.map(x=>({t:x.tipo,desc:x.descricao,dia:x.dia,m:String(x.mes).slice(0,7),v:+x.valor,pg:!!x.pago,obs:x.obs||''})):null;
     }else{
       if(typeof XLSX==='undefined')throw new Error('biblioteca de planilha não carregou');
       const wb=XLSX.read(new Uint8Array(fr.result),{type:'array',cellDates:true});
@@ -980,11 +1022,11 @@ function importFile(file){
         const gk=n>1?[r.d,r.desc,r.tot,r.card,r.n].join('|'):Math.random();r.g=gm[gk]||(gm[gk]=uuid());add.push(r);}
     }
     if(!add.length&&!bud&&!pjb&&!lmb){msg.textContent='Nenhuma linha nova encontrada ('+skip+' já existiam).';return;}
-    confirmBox(`Importar ${add.length} lançamentos novos?`,`${skip} linhas já existiam e serão ignoradas. Total importado: ${brl(sum(add,r=>r.v))}.${bud?' Os limites de orçamento do backup também serão restaurados.':''}${pjb?' A projeção (receitas e despesas previstas) também será restaurada.':''}${lmb?' Os limites dos cartões também serão restaurados.':''}`,'Importar',async()=>{
+    confirmBox(`Importar ${add.length} lançamentos novos?`,`${skip} linhas já existiam e serão ignoradas. Total importado: ${brl(sum(add,r=>r.v))}.${bud?' Os limites de orçamento do backup também serão restaurados.':''}${pjb?' A projeção (receitas e despesas previstas) também será restaurada.':''}${lmb?' Os limites, fechamentos e vencimentos dos cartões também serão restaurados.':''}`,'Importar',async()=>{
       msg.textContent='Importando…';
       const okIns=add.length?await insRows(add,add.length+' lançamentos importados'):true;
       if(bud)await run(async()=>{const list=Object.entries(bud).filter(([,l])=>+l>0).map(([categoria,limite])=>({categoria,limite:+limite}));if(list.length)ok(await sb.from('orcamentos').upsert(list,{onConflict:'user_id,categoria'}));},'Orçamento restaurado',true);
-      if(lmb&&limOk)await run(async()=>{const list=Object.entries(lmb).filter(([,l])=>+l>0).map(([cartao,limite])=>({cartao,limite:+limite}));if(list.length)ok(await sb.from('limites_cartao').upsert(list,{onConflict:'user_id,cartao'}));},'Limites dos cartões restaurados',true);
+      if(lmb&&limOk)await run(async()=>{const list=uniq([...Object.keys(lmb.l),...Object.keys(lmb.c)]).map(cartao=>({cartao,limite:+lmb.l[cartao]>0?+lmb.l[cartao]:null,dia_fechamento:(lmb.c[cartao]||{}).fec||null,dia_vencimento:(lmb.c[cartao]||{}).ven||null}));if(list.length)ok(await sb.from('limites_cartao').upsert(list,{onConflict:'user_id,cartao'}));},'Limites dos cartões restaurados',true);
       if(pjb&&projOk)await run(async()=>{for(const c of chunk(pjb,500))ok(await sb.from('projecao').upsert(c.map(x=>Object.assign({user_id:USER.id},toDbP(x))),{onConflict:'user_id,tipo,descricao,mes'}));},'Projeção restaurada',true);
       const el=document.getElementById('imsg');if(el)el.textContent=okIns?'Importação concluída.':'A importação falhou — veja a mensagem de erro.';
     });
@@ -1007,19 +1049,31 @@ function openNew(){
    <div class="fld"><label>Categoria</label><input id="n-cat" list="dl-cat" required></div>
    <div class="fld"><label>Cartão / forma</label><input id="n-card" list="dl-card" value="${esc(lastCard())}" required></div>
    <div class="fld"><label>Nº de parcelas</label><input id="n-n" type="number" min="1" max="120" value="1"></div>
-   <div class="fld"><label>1ª parcela paga em</label><input id="n-m" type="month" value="${addM(CUR,1)}"></div>
+   <div class="fld"><label>1ª parcela paga em <span id="n-auto" class="muted"></span></label><input id="n-m" type="month" value="${addM(CUR,1)}"></div>
    <div class="fld"><label>Status</label><select id="n-s"><option value="A">Em aberto</option><option value="P">Pago</option></select></div>
    <div class="fld full hint" id="n-prev"></div>
    <div class="actions full" style="grid-column:1/-1"><button type="button" class="btn" data-x>Cancelar</button><button class="btn pri" type="submit">Adicionar</button></div></form>`);
   const q=id=>document.getElementById(id);
-  const prev=()=>{const t=pv(q('n-tot').value),n=Math.max(1,+q('n-n').value||1);q('n-prev').textContent=t?(n>1?`${n}x de ${brl(t/n)} — de ${mLbl(q('n-m').value||CUR)} a ${mLbl(addM(q('n-m').value||CUR,n-1))}`:`À vista: ${brl(t)} em ${mLbl(q('n-m').value||CUR)}`):'';};
-  ['n-tot','n-n','n-m'].forEach(i=>q(i).oninput=prev);
-  q('n-card').onchange=()=>{if(q('n-card').value.toUpperCase()==='DINHEIRO'){q('n-m').value=q('n-d').value.slice(0,7);q('n-s').value='P';prev();}};
+  const prev=()=>{const t=pv(q('n-tot').value),n=Math.max(1,+q('n-n').value||1);
+    let h=t?(n>1?`${n}x de ${brl(t/n)} — de ${mLbl(q('n-m').value||CUR)} a ${mLbl(addM(q('n-m').value||CUR,n-1))}`:`À vista: ${brl(t)} em ${mLbl(q('n-m').value||CUR)}`):'';
+    const card=q('n-card').value.trim().toUpperCase(),left=t&&q('n-s').value!=='P'?limLeft(card,t):null;
+    if(left!=null)h+=(h?'<br>':'')+(left<0?`<b class="up">⚠ Estoura o limite do ${esc(card)} em ${brl(-left)}</b>`:`<span class="${left<lims[card]*0.2?'up':'down'}">Depois desta compra sobram ${brl(left)} de limite no ${esc(card)}</span>`);
+    q('n-prev').innerHTML=h;};
+  let manualM=false;
+  const autoM=()=>{const m=dueMonth(q('n-card').value,q('n-d').value);q('n-auto').textContent=m&&!manualM?'(pela data de fechamento)':'';if(m&&!manualM)q('n-m').value=m;prev();};
+  ['n-tot','n-n'].forEach(i=>q(i).oninput=prev);q('n-s').onchange=prev;
+  q('n-m').oninput=()=>{manualM=true;q('n-auto').textContent='';prev();};
+  q('n-d').onchange=autoM;q('n-card').oninput=autoM;
+  q('n-card').onchange=()=>{if(q('n-card').value.toUpperCase()==='DINHEIRO'){q('n-m').value=q('n-d').value.slice(0,7);q('n-s').value='P';prev();}else autoM();};
+  autoM();
   document.querySelector('#modal [data-x]').onclick=closeModal;
   q('fnew').onsubmit=e=>{e.preventDefault();const t=pv(q('n-tot').value);if(!(t>0)){q('n-tot').focus();return;}
     const n=Math.max(1,Math.min(120,+q('n-n').value||1));const g=uuid();const m0=q('n-m').value||CUR;const list=[];
     for(let p=1;p<=n;p++)list.push({d:q('n-d').value,desc:q('n-desc').value.trim(),cat:normCat(q('n-cat').value),tot:r2(t),card:q('n-card').value.trim().toUpperCase(),n,p,v:t/n,m:addM(m0,p-1),s:q('n-s').value,g});
-    closeModal();insRows(list,n>1?`Despesa adicionada em ${n} parcelas`:'Despesa adicionada');};
+    const msg=n>1?`Despesa adicionada em ${n} parcelas`:'Despesa adicionada';
+    const left=q('n-s').value!=='P'?limLeft(list[0].card,t):null;
+    if(left!=null&&left<0&&!e.submitter?.dataset.force){const b=e.target.querySelector('button[type=submit]');b.textContent='Adicionar mesmo assim';b.dataset.force='1';q('n-prev').scrollIntoView({block:'nearest'});return;}
+    closeModal();insRows(list,msg);};
 }
 function openEdit(id){
   const r=rows.find(x=>x.id===id);if(!r)return;const grp=rows.filter(x=>x.g===r.g);
